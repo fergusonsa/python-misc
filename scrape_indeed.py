@@ -1,8 +1,75 @@
 # coding: utf-8
-import sys, urllib.parse
+import sys, urllib.parse, os.path
 from bs4 import BeautifulSoup
 from urllib.request import urlopen
 import SysOutRedirector
+import sqlite3 as sqlite
+
+def runSQLScriptFile(scriptfilename, dbfilename):
+    try:
+        print("\nOpening DB")
+        connection = sqlite.connect(dbfilename)
+        cursor = connection.cursor()
+       
+        print("Reading Script...")
+        scriptFile = open(scriptfilename, 'r')
+        script = scriptFile.read()
+        scriptFile.close()
+        
+        print("Running Script...")
+        cursor.executescript(script)
+        
+        connection.commit()
+        print("Changes successfully committed\n")
+                        
+    except Exception as e:
+        print( "Something went wrong:")
+        print( e)
+    finally:    
+        print("\nClosing DB")
+        connection.close()
+      
+def ensureDatabaseTablesAlreadyCreated(databaseName):
+    # Get the list of required tables from the available C:\workspaces\scripts\AppInfoDatabase\*.sql files
+    path = os.path.dirname(databaseName)
+    reqTableNames = [os.path.splitext(f)[0] for f in os.listdir(path) if f.endswith('.sql')]
+    # print(reqTableNames)
+    
+    con = sqlite.connect(databaseName)
+    cursor = con.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+    tables = map(lambda t: t[0], cursor.fetchall())
+    availableTables = []
+    for table in tables:
+        availableTables.append(table)
+        
+    # print('Number of tables in database: {}'.format(len(availableTables)))
+    # print(availableTables)
+        
+    # Find out if any of the required tables are missing
+    missingTables = set(reqTableNames).difference(set(availableTables))
+    for missingTable in missingTables:
+        sqlFilePath = os.path.join(path, '{}.sql'.format(missingTable))
+        print('Creating the missing database table {} in the database {} using the SQL file {}.'.format(missingTable, databaseName, sqlFilePath))
+        runSQLScriptFile(sqlFilePath, databaseName)
+
+
+def savePostingsToDB(fullPostingsList, dbName):
+    con = sqlite.connect(dbName)
+    with con:
+        if not os.path.isfile(dbName):
+            ensureDatabaseTablesAlreadyCreated(dbName)
+        
+        con.row_factory = sqlite.Row
+        for posting in fullPostingsList:
+            sqlQuery = 'INSERT INTO JobPostings (Id, URL, Title, Company, Locale) VALUES (?, ?, ?, ?, ?) ' #, 
+            cursor = con.cursor()
+            try:
+                cursor.execute(sqlQuery, (posting['id'], posting['url'], posting['title'], posting['company'], posting['locale'], ))
+                con.commit()
+            except sqlite.IntegrityError as e:
+                print('Unable to insert posting id: "{}", url: "{}", title: "{}", company: "{}", locale: "{}" as the Id, URL, Title, Company, Locale values are not unique.'.format(posting['id'], posting['url'], posting['title'], posting['company'], posting['locale']))
+
 
 def getMaxLengthOfDictValuesForKeys(thisDict, keys):    
     lengths = [len(thisDict[key]) for key in keys]
@@ -53,6 +120,7 @@ def parseHtmlPage(pageHtml, urlBase=''):
                 
     for it in items:
             
+        id = None
         titleEl = it.find('a', {'itemprop':'title'})
         if titleEl:
             title = titleEl['title']
@@ -60,6 +128,8 @@ def parseHtmlPage(pageHtml, urlBase=''):
                 url = 'http://{}{}'.format(urlBase, titleEl['href'])
             else:
                 url = titleEl['href']
+            id = titleEl['href'].split('=')[1]    
+            
         else:
             print('Unable to get title for this item: {}'.format(str(it)))
             title = 'Uknown title!'
@@ -97,7 +167,7 @@ def parseHtmlPage(pageHtml, urlBase=''):
                 
         except:
             locale = 'unknown'
-        postingsList.append({'title':title, 'url':url, 'company':company, 'locale':locale})
+        postingsList.append({'title':title, 'url':url, 'company':company, 'locale':locale, 'id':id})
     return postingsList
     
 def buildUrl(urlSchema, netLoc,  urlPath, urlArguments, startIndex):
@@ -109,6 +179,7 @@ def buildUrl(urlSchema, netLoc,  urlPath, urlArguments, startIndex):
     
 ## ------------------------------------------------------------------------------------------------------    
 def main(args):
+    dbName = 'c:\workspaces\jobPosting\jobPosting.db'
     # netLoc = 'www.indeed.co.uk'
     # location = 'Scotland'
     netLoc = 'ca.indeed.com'
@@ -137,7 +208,11 @@ def main(args):
         postingsList = parseHtmlPage(pageHtml, netLoc)
         fullPostingsList.extend(postingsList)
 
+    savePostingsToDB(fullPostingsList, dbName)
     displayListings(fullPostingsList)
+    
+    print('\nScraped {} postings from {} with the location {}.\n'.format(len(fullPostingsList), netLoc, location))
+    
     sysOutRedirect.close()
 
 if __name__ == "__main__":
