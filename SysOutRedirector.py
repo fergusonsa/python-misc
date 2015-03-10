@@ -1,4 +1,4 @@
-import sys, os.path
+import sys, os.path, codecs
 from time import strftime
 
 class SysOutRedirector:
@@ -66,7 +66,10 @@ class SysOutRedirector:
         # save the existing sys.stdout 
         self.originalSysOut = sys.__stdout__
         if includeSysOut:
-            self.streams.append(self.originalSysOut)
+            if sys.__stdout__.encoding != 'UTF-8':
+                self.streams.append(codecs.getwriter('utf-8')(self.originalSysOut.buffer, 'strict'))
+            else:    
+                self.streams.append(self.originalSysOut)
 
         self.addOutputFile(filePath, path, filePrefix, includeSysOut, createParentDirectory)
         
@@ -79,7 +82,11 @@ class SysOutRedirector:
                     st = txt
                 else:
                     st = str(txt, 'utf8', 'replace')                    
-                strm.write(st)
+                try:
+                    strm.write(st)
+                except:
+                    self.originalSysOut.write('EXCEPTION SysOutRedirector: Cannot write "{}" to stream {}.'.format(st, self.streams.index(strm)))
+                    
                 strm.flush()
 
     def writeln(self, txt):
@@ -90,8 +97,11 @@ class SysOutRedirector:
 
     #pass all other methods to __stdout__ so that we don't have to override them
     def __getattr__(self, name):
-        return sys.__stdout__.__getattr__(name)
-
+        try:
+            return getattr(sys.__stdout__, name)
+        except:
+            sys.__stdout__.write('EXCEPTION SysOutRedirector.__getattr__: Cannot get sys.__stdout__ attribute "{}"'.format(name))
+        
     def flush(self):
         for strm in self.streams:
             strm.flush()
