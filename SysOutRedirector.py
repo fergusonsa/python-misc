@@ -67,6 +67,7 @@ class SysOutRedirector:
         self.originalSysOut = sys.__stdout__
         if includeSysOut:
             if sys.__stdout__.encoding != 'UTF-8':
+                # See http://www.macfreek.nl/memory/Encoding_of_Python_stdout for explanation of what is going on.
                 self.streams.append(codecs.getwriter('utf-8')(self.originalSysOut.buffer, 'strict'))
             else:    
                 self.streams.append(self.originalSysOut)
