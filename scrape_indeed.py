@@ -4,6 +4,54 @@ from bs4 import BeautifulSoup
 from urllib.request import urlopen
 import SysOutRedirector
 import sqlite3 as sqlite
+   
+def executeUpdateSQL(sqlQuery, databaseName=None):
+    '''
+    Parameters: 
+
+    '''
+    resList = []
+    con = sqlite.connect(databaseName)
+
+    try:
+        with con:
+            cursor = con.cursor()
+            cursor.executescript(sqlQuery)
+            
+            con.commit()
+    except Exception as e:
+        print( "Something went wrong:")
+        print( e)
+
+def getResultDictForSQL(sqlQuery, paramsDict={}, databaseName=None):
+    '''
+    Parameters: 
+
+    '''
+    resList = []
+    con = sqlite.connect(databaseName)
+
+    if paramsDict == None:
+        paramsDict = {}
+        
+    with con:
+        # con.create_function("instr", 2, instr)
+        con.row_factory = sqlite.Row
+        cursor = con.cursor()
+        if len(paramsDict.keys()) > 0:
+            cursor.execute(sqlQuery, paramsDict)
+        else:
+            cursor.execute(sqlQuery)
+        
+        row = cursor.fetchone()
+        while row:
+            rowList = {}
+            for col in row.keys():
+                rowList[col] = row[col]
+            resList.append(rowList)
+            row = cursor.fetchone()
+    return resList
+
 
 def runSQLScriptFile(scriptfilename, dbfilename):
     try:
@@ -53,23 +101,30 @@ def ensureDatabaseTablesAlreadyCreated(databaseName):
         print('Creating the missing database table {} in the database {} using the SQL file {}.'.format(missingTable, databaseName, sqlFilePath))
         runSQLScriptFile(sqlFilePath, databaseName)
 
-
+       
 def savePostingsToDB(fullPostingsList, dbName):
     con = sqlite.connect(dbName)
-    with con:
-        if not os.path.isfile(dbName):
-            ensureDatabaseTablesAlreadyCreated(dbName)
-        
+    insertedCount = 0
+    alreadyThereCount = 0
+    with con:        
         con.row_factory = sqlite.Row
+        sqlQuery = 'INSERT INTO JobPostings (Id, URL, Title, Company, Locale) VALUES (?, ?, ?, ?, ?) ' #, 
         for posting in fullPostingsList:
-            sqlQuery = 'INSERT INTO JobPostings (Id, URL, Title, Company, Locale) VALUES (?, ?, ?, ?, ?) ' #, 
             cursor = con.cursor()
             try:
                 cursor.execute(sqlQuery, (posting['id'], posting['url'], posting['title'], posting['company'], posting['locale'], ))
                 con.commit()
+                insertedCount += 1
             except sqlite.IntegrityError as e:
-                print('Unable to insert posting id: "{}", url: "{}", title: "{}", company: "{}", locale: "{}" as the Id, URL, Title, Company, Locale values are not unique.'.format(posting['id'], posting['url'], posting['title'], posting['company'], posting['locale']))
+                # print('Unable to insert posting id: "{}", url: "{}", title: "{}", company: "{}", locale: "{}" as the Id, URL, Title, Company, Locale values are not unique.'.format(posting['id'], posting['url'], posting['title'], posting['company'], posting['locale']))
+                alreadyThereCount += 1
+                
+    print('\nInserted {} of the {} found postings into the database. {} postings were already there. \n'.format(insertedCount, len(fullPostingsList), alreadyThereCount))
 
+    if insertedCount > 0:
+        executeUpdateSQL("update JobPostings set province = trim(substr(Locale, instr(Locale, ',')+1)) where Province is null;", dbName)
+        executeUpdateSQL("update JobPostings set City = trim(substr(Locale, 1, instr(Locale, ',')-1)) where City is null;", dbName)
+        executeUpdateSQL("insert into RecruitingCompanies select Company as Name, min(insertedDate) as DateContacted, '' as Comment, 0 as ResumeSubmitted, 0 as NotInterested, '' as URL, 0 as CannotSubmitResume from JobPostings left join RecruitingCompanies on Company = Name where Name is null group by Company order by Company", dbName)
 
 def getMaxLengthOfDictValuesForKeys(thisDict, keys):    
     lengths = [len(thisDict[key]) for key in keys]
@@ -85,22 +140,23 @@ def getMaxLengthOfDictValuesForKeyInListOfDicts(dictList, keys):
 
 
 def displayListings(postingsList):
-    print('\nFound {} postings!'.format(len(postingsList)))
-    padCompany = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['company'])
-    padTitle = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['title'])
-    padLocation = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['locale'])
-    print('\n\n{0:{4}}  {1:{5}}  {2:{6}}  {3}'.format('Location', 'Organization', 'Job Title', 'Url', padLocation, padCompany, padTitle))
-    for i in postingsList:
-        # try:
-            # print('{0.company!s:{1}}  {0.title!s:{2}}  {0.locale!s:{3}}  {0.url!s}'.format(i, padCompany, padTitle, padLocation))
-        # except:
-            try:
-                # typ, val, tb = sys.exc_info()
-                # print('{0!s:{4}}  {1!s:{5}}  {2!s:{6}}  {3!s}         XX {7}  {8}'.format(i.get('company'), i.get('title'), i.get('locale'), i.get('url'), padCompany, padTitle, padLocation, typ, val))
-                print('{0!s:{4}}  {1!s:{5}}  {2!s:{6}}  {3!s}'.format(i.get('locale'), i.get('company'), i.get('title'), i.get('url'), padLocation, padCompany, padTitle))
-            except:
-                typ2, val2, tb2 = sys.exc_info()
-                print('cannot print line! - Except type: {}  Val: {}'.format(typ2, val2))
+    print('\nFound {} postings!\n\n'.format(len(postingsList)))
+    if len(postingsList) > 0:
+        padCompany = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['company'])
+        padTitle = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['title'])
+        padLocation = getMaxLengthOfDictValuesForKeyInListOfDicts(postingsList, ['locale'])        
+        print('{0:{4}}  {1:{5}}  {2:{6}}  {3}'.format('Location', 'Organization', 'Job Title', 'Url', padLocation, padCompany, padTitle))
+        for i in postingsList:
+            # try:
+                # print('{0.company!s:{1}}  {0.title!s:{2}}  {0.locale!s:{3}}  {0.url!s}'.format(i, padCompany, padTitle, padLocation))
+            # except:
+                try:
+                    # typ, val, tb = sys.exc_info()
+                    # print('{0!s:{4}}  {1!s:{5}}  {2!s:{6}}  {3!s}         XX {7}  {8}'.format(i.get('company'), i.get('title'), i.get('locale'), i.get('url'), padCompany, padTitle, padLocation, typ, val))
+                    print('{0!s:{4}}  {1!s:{5}}  {2!s:{6}}  {3!s}'.format(i.get('locale'), i.get('company'), i.get('title'), i.get('url'), padLocation, padCompany, padTitle))
+                except:
+                    typ2, val2, tb2 = sys.exc_info()
+                    print('cannot print line! - Except type: {}  Val: {}'.format(typ2, val2))
 
 def getHtmlPage(url):
     # print('getting URL "{}"'.format(url))
@@ -109,7 +165,7 @@ def getHtmlPage(url):
     pageFile.close()
     return pageHtml
     
-def parseHtmlPage(pageHtml, urlBase=''):
+def parseHtmlPage(pageHtml, urlBase='', knownPostingIdsList=[]):
     soup = BeautifulSoup(pageHtml)
     items = soup.findAll('div', {'class':'row', 'itemtype':'http://schema.org/JobPosting'})
     postingsList = []
@@ -129,7 +185,8 @@ def parseHtmlPage(pageHtml, urlBase=''):
             else:
                 url = titleEl['href']
             id = titleEl['href'].split('=')[1]    
-            
+            if id in knownPostingIdsList:
+                continue
         else:
             print('Unable to get title for this item: {}'.format(str(it)))
             title = 'Uknown title!'
@@ -177,6 +234,13 @@ def buildUrl(urlSchema, netLoc,  urlPath, urlArguments, startIndex):
     url = urllib.parse.urlunparse((urlSchema, netLoc, urlPath, '', queryString, '')) 
     return url
     
+def isSmallListInBigList(bigList, smallList):
+    
+    for item in smallList:
+        if item not in bigList:
+            return False
+    return True
+
 ## ------------------------------------------------------------------------------------------------------    
 def main(args):
     dbName = 'c:\workspaces\jobPosting\jobPosting.db'
@@ -187,32 +251,41 @@ def main(args):
     sysOutRedirect = SysOutRedirector.SysOutRedirector(path='/workspaces/reports/', filePrefix='ScrapeIndeed-{}'.format(netLoc))
     # url = "http://ca.indeed.com/jobs?as_and=&as_phr=&as_any=java+devops&as_not=&as_ttl=&as_cmp=&jt=contract&st=&salary=&radius=25&l=Canada&fromage=any&limit=100&sort=&psf=advsrch"
     # url = "http://www.indeed.co.uk/jobs?as_and=&as_phr=&as_any=java+devops&as_not=&as_ttl=&as_cmp=&jt=contract&st=&salary=&radius=25&l=Scotland&fromage=any&limit=100&sort=&psf=advsrch"
-    # http://www.indeed.co.uk/jobs?q=%28java+or+devops%29&l=Scotland&jt=contract&start=10
+    fullPostingsList = []
+    searchTermsList = ['java', 'devops']
     urlSchema = 'http'
     urlPath = 'jobs'
     startIndex = 0
-    urlArguments = {'q': '(java or devops)', 
-                    'l': location,
-                    'jt': 'contract',
-                    'start': startIndex }
-    url = buildUrl(urlSchema, netLoc, urlPath, urlArguments, startIndex)
-    print('\nHere is the initial URL to be "scraped": {}\n\n'.format(url))
-    pageHtml = getHtmlPage(url)
-    fullPostingsList = []
-    postingsList = parseHtmlPage(pageHtml, netLoc)
-    fullPostingsList.extend(postingsList)
-    while len(postingsList) >= 10:
-        startIndex += 10
+    for searchTerm in searchTermsList:
+        urlArguments = {'q': searchTerm, 
+                        'l': location,
+                        'jt': 'contract',
+                        'sort': 'date',
+                        'start': startIndex }
         url = buildUrl(urlSchema, netLoc, urlPath, urlArguments, startIndex)
+        print('\nHere is the initial URL to be "scraped": {}\n\n'.format(url))
         pageHtml = getHtmlPage(url)
-        postingsList = parseHtmlPage(pageHtml, netLoc)
-        fullPostingsList.extend(postingsList)
+        if not os.path.isfile(dbName):
+            ensureDatabaseTablesAlreadyCreated(dbName)
 
-    savePostingsToDB(fullPostingsList, dbName)
+        alreadyStoredPostingsRows = getResultDictForSQL('select distinct Id from JobPostings', None, dbName)
+        alreadyStoredPostings = [it['Id'] for it in alreadyStoredPostingsRows]
+        
+        postingsList = parseHtmlPage(pageHtml, netLoc, alreadyStoredPostings)
+        print('Found {} new postings to save from url {}!'.format(len(postingsList), url))
+        fullPostingsList.extend(postingsList)
+        while len(postingsList) > 0 and startIndex < 1000:
+            startIndex += 10
+            url = buildUrl(urlSchema, netLoc, urlPath, urlArguments, startIndex)
+            pageHtml = getHtmlPage(url)
+            postingsList = parseHtmlPage(pageHtml, netLoc, alreadyStoredPostings)
+            print('Found {} new postings to save from url {}!'.format(len(postingsList), url))
+            fullPostingsList.extend(postingsList)
+
     displayListings(fullPostingsList)
+    savePostingsToDB(fullPostingsList, dbName)
     
     print('\nScraped {} postings from {} with the location {}.\n'.format(len(fullPostingsList), netLoc, location))
-    
     sysOutRedirect.close()
 
 if __name__ == "__main__":
