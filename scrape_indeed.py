@@ -1,8 +1,10 @@
 # coding: utf-8
+import datetime
 import sys
 import urllib.parse
 import os.path
 import argparse
+import pprint
 import requests
 import re
 import operator
@@ -57,6 +59,10 @@ jobSiteDetails = {
                     'criteria': {'itemprop':'title'},
                     'property': 'href',
                 },
+                'postedDate' : {
+                    'element':'span',
+                    'criteria': {'class':'date'},
+                },
             },
         }
     },
@@ -73,31 +79,40 @@ jobSiteDetails = {
         'username': None,
         'password': None,
         'parseInfo': {
-            'parentElement':'li',
-            'parentCriteria': {'class':'result'},
+            'numberJobsFound': {
+                'element':'h1',
+                'criteria':{},
+                'regex': 'Showing (?:[0-9,]+)-(?:[0-9,]+) of ([0-9,]+) (?:[a-zA-Z ])*',
+            },
+            'parentElement':'div',
+            'parentCriteria': {'class':'js-job'},
             'fields' : {
                 'title': {
-                    'element':'a',
+                    'element':'h2',
                     'criteria':{'itemprop':'title'},
                 },
                 'id' : {
                     'element':'parent',
                     'criteria':{},
                     'property': 'id',
-                    'regex': '(?mx)^r.(.*):[0-9]$',
+                    'regex': '(?mx)^r:(.*):[0-9]+$',
                 },
                 'locale' : {
                     'element':'span',
                     'criteria':{'itemprop':'address'},
                 },
                 'company' : {
-                    'element':'h4',
-                    'criteria':{'class':'company', 'itemprop':'name'},
+                    'element':'span',
+                    'criteria':{'class':'serp-company', 'itemprop':'name'},
                 },
                 'url' : {
                     'element':'a',
-                    'criteria': {'itemprop':'title'},
+                    'criteria': {'class':'js-job-link'},
                     'property': 'href',
+                },
+                'postedDate' : {
+                    'element':'span',
+                    'criteria': {'class':'serp-timestamp'},
                 },
             },
         }
@@ -205,13 +220,18 @@ def savePostingsToDB(fullPostingsList, dbName):
     alreadyThereCount = 0
     with con:
         con.row_factory = sqlite.Row
-        sqlQuery = 'INSERT INTO JobPostings (Id, URL, Title, Company, Locale) VALUES (?, ?, ?, ?, ?) ' #,
+        sqlQuery = 'INSERT INTO JobPostings (Id, URL, Title, Company, Locale, SearchTerms, ElementHtml, postedDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ' #,
         for posting in fullPostingsList:
             cursor = con.cursor()
             try:
-                cursor.execute(sqlQuery, (posting['id'], posting['url'], posting['title'], posting['company'], posting['locale'], ))
+                cursor.execute(sqlQuery, (posting['id'], posting['url'], posting['title'], posting.get('company'), posting.get('locale'), posting['searchTerms'], posting['elem'].prettify(formatter="html"), posting.get('postedDate')))
                 con.commit()
                 insertedCount += 1
+            except sqlite.InterfaceError as e:
+                pp = pprint.PrettyPrinter()
+                print('Error with the parameters being supplied to the SQL. Here is the posting to be entered:')
+                pp.pprint(posting)
+                break
             except sqlite.IntegrityError as e:
                 # print('Unable to insert posting id: "{}", url: "{}", title: "{}", company: "{}", locale: "{}" as the Id, URL, Title, Company, Locale values are not unique.'.format(posting['id'], posting['url'], posting['title'], posting['company'], posting['locale']))
                 alreadyThereCount += 1
@@ -225,7 +245,7 @@ def savePostingsToDB(fullPostingsList, dbName):
         executeUpdateSQL("insert into RecruitingCompanies(Name, DateInserted) select Company as Name, min(insertedDate) as DateInserted from JobPostings left join RecruitingCompanies on Company = Name where Name is null group by Company order by Company", dbName)
 
 def getMaxLengthOfDictValuesForKeys(thisDict, keys):
-    lengths = [len(thisDict[key]) for key in keys]
+    lengths = [len(thisDict.get(key)) if thisDict.get(key) else 0 for key in keys]
     if len(lengths) == 0:
         lengths.append(0)
     return max(lengths)
@@ -260,21 +280,15 @@ def generateHtmlPage(dirPath, netloc, searchTermsList, postingsList):
     filenamePath = os.path.abspath(os.path.join(dirPath, fileName))
     # Sort the list of postings by the locale
     sortedPostings = sorted(postingsList, key=lambda k: k['locale'])
-    with open(filenamePath, 'w') as myFile:
-        myFile.write('<html>\n<body>\n<p><h2>Search Site:</h2> {}</p>\n<p><h2>Search Terms:</h2>\n<hr\><ul>\n'.format(netloc))
+    with open(filenamePath, 'w', encoding='utf-8') as myFile:
+        myFile.write('<html>\n<body>\n<p><h2>Search Site:</h2> {}</p>\n<p><h2>Search Terms:</h2>\n<hr/><ul>\n'.format(netloc))
         for st in searchTermsList:
             myFile.write('<li>{}</li>\n'.format(st))
-        myFile.write('</ul></p>\n\n')
+        myFile.write('</ul></p>\n\n<hr/>\n\n')
 
         for posting in sortedPostings:
             try:
-                linkElems = posting['elem'].findAll('a')
-                for linkElem in linkElems:
-                    if not linkElem['href'].startswith('http'):
-                        if linkElem['href'].startswith('/'):
-                            linkElem['href'] = 'http://' + netloc + linkElem['href']
-                        else:
-                            linkElem['href'] = 'http://' + netloc + '/' + linkElem['href']
+                myFile.write('<ul><li>ID: {}</li><li>Title: {}</li><li>URL: {}</li><li>Company: {}</li><li>Location: {}</li><li>Posted Date: {}</li></ul>\n'.format(posting.get('id'), posting.get('title'), posting.get('url'), posting.get('company'), posting.get('locale'), posting.get('postedDate'),))
                 myFile.write(str(posting['elem']))
             except:
                 typ2, val2, tb2 = sys.exc_info()
@@ -283,6 +297,22 @@ def generateHtmlPage(dirPath, netloc, searchTermsList, postingsList):
         myFile.write('\n</body>\n</html>')
     print('\nWrote {} postings to the html file {}\n'.format(len(postingsList), filenamePath))
 
+def convertAgoToDate(agoStr):
+    value = re.sub('([0-9]+[+]?) (?:minute[s]?|hour[s]?|day[s]?) ago', r"\1", agoStr)
+
+    if 'minute' in agoStr:
+        dt = (datetime.datetime.now() - datetime.timedelta(minutes=int(value))).strftime('%Y-%m-%d %H:%M:%S')
+    elif 'hour' in agoStr:
+        dt = (datetime.datetime.now() - datetime.timedelta(hours=int(value))).strftime('%Y-%m-%d %H:%M:%S')
+    elif 'day' in agoStr:
+        if value == '30+':
+            dt = 'over 30 days old'
+        else:
+            dt = (datetime.datetime.now() - datetime.timedelta(days=int(value))).strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        dt = 'unknown'
+    return dt
+
 def getHtmlPage(url):
     # print('getting URL "{}"'.format(url))
     pageFile = urlopen(url)
@@ -290,7 +320,7 @@ def getHtmlPage(url):
     pageFile.close()
     return pageHtml
 
-def parseHtmlPage2(pageHtml, jobsiteDetails, knownPostingIdsList=[]):
+def parseHtmlPage2(pageHtml, jobsiteDetails, searchTerms='', knownPostingIdsList=[]):
     '''
             'numberJobsFound': {
                 'element':'div',
@@ -300,7 +330,7 @@ def parseHtmlPage2(pageHtml, jobsiteDetails, knownPostingIdsList=[]):
     '''
     # print('size of known postings list: {}'.format(len(knownPostingIdsList)))
     soup = BeautifulSoup(pageHtml)
-    totalNumberJobsFound = 'Unknown'
+    totalNumberJobsFound = -1
     numJobsDetails = jobsiteDetails['parseInfo'].get('numberJobsFound')
     if numJobsDetails:
         numberPostingsElem = soup.find(numJobsDetails['element'], numJobsDetails['criteria'])
@@ -309,7 +339,7 @@ def parseHtmlPage2(pageHtml, jobsiteDetails, knownPostingIdsList=[]):
             prop = numJobsDetails.get('property')
             if prop:
                 value = numberPostingsElem[prop]
-            elif numberPostingsElem.text:
+            elif hasattr(numberPostingsElem, 'text'):
                 value = numberPostingsElem.text
             else:
                 value = numberPostingsElem.string
@@ -320,12 +350,9 @@ def parseHtmlPage2(pageHtml, jobsiteDetails, knownPostingIdsList=[]):
 
     items = soup.findAll(jobsiteDetails['parseInfo']['parentElement'], jobsiteDetails['parseInfo']['parentCriteria'])
     postingsList = {}
-    # print('Found {} items on page.'.format(len(items)))
-
 
     for it in items:
-        postingInfo = {}
-        postingInfo['elem'] = it
+        postingInfo = {'elem': it, 'searchTerms': searchTerms}
         for field in jobsiteDetails['parseInfo']['fields'].keys():
             fieldInfo = jobsiteDetails['parseInfo']['fields'][field]
             # print('looking for field {}'.format(field))
@@ -341,31 +368,45 @@ def parseHtmlPage2(pageHtml, jobsiteDetails, knownPostingIdsList=[]):
                 prop = fieldInfo.get('property')
                 if prop:
                     value = elem[prop]
-                elif elem.text:
+                elif hasattr(elem, 'text'):
                     value = elem.text
-                else:
+                elif elem:
                     value = elem.string
 
                 if fieldInfo.get('regex'):
                     value = re.sub(fieldInfo['regex'], r"\1", value)
 
                 if value:
-                    postingInfo[field] = value.strip()
+                    postingInfo[field] = re.sub(r"^\s+|\s+$|\s+(?=\s)", "", value)
             except Exception as e:
                 typ, val, tb = sys.exc_info()
-                print('Unable to parse posting {} information for item: \n\n{} \n\nError type: {}, val: {}'.format(field, it, type, val))
+                print('Unable to parse posting {} information for item: \n\n{} \n\nError type: {}, val: {}'.format(field, it, typ, val))
 
         if postingInfo.get('id') and postingInfo.get('id') not in knownPostingIdsList:
+            if postingInfo.get('postedDate'):
+                postingInfo['postedDate'] = convertAgoToDate(postingInfo['postedDate'])
+
+            if postingInfo.get('url'):
+                postingInfo['url'] = 'http://{}{}'.format(jobsiteDetails['netLoc'], postingInfo['url'])
+            if postingInfo.get('elem'):
+                linkElems = postingInfo['elem'].findAll('a')
+                for linkElem in linkElems:
+                    if not linkElem['href'].startswith('http'):
+                        if linkElem['href'].startswith('/'):
+                            linkElem['href'] = 'http://{}{}'.format(jobsiteDetails['netLoc'], linkElem['href'])
+                        else:
+                            linkElem['href'] = 'http://{}/{}'.format(jobsiteDetails['netLoc'], linkElem['href'])
+
             postingsList[postingInfo['id']] = postingInfo
             knownPostingIdsList.append(postingInfo['id'])
-            print('Adding item details for id "{}" to list'.format(postingInfo['id']))
+            print('Adding item details for id "{}" to list with posted Date {}'.format(postingInfo['id'], postingInfo.get('postedDate')))
         elif postingInfo.get('id') in knownPostingIdsList:
             print('Item ID "{}" is already in the list of {} known posting ids'.format(postingInfo['id'], len(knownPostingIdsList)))
         else:
             print('Unknown item not being added to list')
     return postingsList, len(items), totalNumberJobsFound
 
-def parseHtmlPage(pageHtml, urlBase='', knownPostingIdsList=[]):
+def parseHtmlPage(pageHtml, urlBase='', searchTerms='', knownPostingIdsList=[]):
     '''
     For ca.indeed.com website pages, the criteria for each item is as follows:
         parent div:     'div', {'class':'row', 'itemtype':'http://schema.org/JobPosting'}
@@ -426,7 +467,10 @@ def parseHtmlPage(pageHtml, urlBase='', knownPostingIdsList=[]):
                 if el:
                     el1 = el.find('span', {'itemprop':'name'})
                     if el1:
-                        company = el1.string.strip()
+                        if el1.string:
+                            company = el1.string.strip()
+                        else:
+                            company = el1.text.strip()
                     else:
                         company = 'unknown - cannot find name'
                 else:
@@ -469,7 +513,7 @@ def parseHtmlPage(pageHtml, urlBase='', knownPostingIdsList=[]):
             locale = localeEl.text.replace('\n', '').strip()
 
         if id:
-            postingsList[id] = {'title':title, 'url':url, 'company':company, 'locale':locale, 'id':id, 'elem': it}
+            postingsList[id] = {'title':title, 'url':url, 'company':company, 'locale':locale, 'id':id, 'elem': it, 'searchTerms': searchTerms}
     return postingsList, len(items)
 
 def buildUrl(urlSchema, netLoc,  urlPath, urlArguments, startIndex):
@@ -498,14 +542,14 @@ def loginToWebSite(session, jobSiteDetailInfo):
         session.get(jobSiteDetailsInfo['loginUrl'], verify=False)
         session.post(jobSiteDetailsInfo['loginUrl'], data=login_data, headers={"Referer":"HOMEPAGE"})
 
-def getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo, searchTermsList, expectedPostingsPerPage=10,maxPages=100, minPages=10):
+def getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo, searchTermsList, knownPostIds=[], expectedPostingsPerPage=10,maxPages=100, minPages=10):
     fullPostingsList = {}
     session = requests.Session()
     if jobSiteDetailsInfo['urlSchema'] == 'https':
         loginToWebsite(session, jobSiteDetailsInfo)
 
     for searchTerm in searchTermsList:
-        fullPostingsList[searchTerm] = getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, expectedPostingsPerPage=expectedPostingsPerPage,maxPages=maxPages, minPages=minPages, session=session)
+        fullPostingsList.update(getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, knownPostIds, expectedPostingsPerPage=expectedPostingsPerPage,maxPages=maxPages, minPages=minPages, session=session))
     session = None
     return fullPostingsList
 
@@ -516,18 +560,16 @@ def checkForMorePostings(numPostingsOnPage, expectedPostingsPerPage, numAllUniqu
 
     '''
     if startIndex + expectedPostingsPerPage <= numPostingsSiteFound:
-        return True
-    elif numPostingsOnPage == expectedPostingsPerPage:
-         if numAllUniquePostingsFoundOnPage > 0 and startIndex < expectedPostingsPerPage * (maxPages-1):
-             return True
-         elif startIndex < expectedPostingsPerPage * (minPages-1):
-             return True
-         else:
-             return False
+        if numPostingsOnPage == expectedPostingsPerPage:
+            if numAllUniquePostingsFoundOnPage > 0 and startIndex < expectedPostingsPerPage * (maxPages-1):
+                return True
+            elif startIndex < expectedPostingsPerPage * (minPages-1):
+                return True
+        return False
     else:
          return False
 
-def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, expectedPostingsPerPage=10,maxPages=100, minPages=4, session=None):
+def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, knownPostIds=[], expectedPostingsPerPage=10,maxPages=100, minPages=4, session=None):
     fullPostingsList = {}
     if not session:
         session = requests.Session()
@@ -547,9 +589,10 @@ def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, expectedPostingsPerPa
     page = session.get(url, params=urlArguments, verify=False)
     print('\n\nHere is the initial URL to be "scraped": {}\n'.format(page.url))
 
-    postingsList, numPostingsOnPage, initialTotalNumberJobsFound = parseHtmlPage2(page.text, jobSiteDetailsInfo, list(fullPostingsList.keys()))
+    postingsList, numPostingsOnPage, initialTotalNumberJobsFound = parseHtmlPage2(page.text, jobSiteDetailsInfo, searchTerm, knownPostIds)
     print('Found {} new of {} postings of {} from url {}'.format(len(postingsList), numPostingsOnPage, initialTotalNumberJobsFound, page.url))
     fullPostingsList.update(postingsList)
+    knownPostIds.extend(list(postingsList.keys()))
     # while numPostingsOnPage == expectedPostingsPerPage and ((len(postingsList) > 0 and startIndex < expectedPostingsPerPage * (maxPages-1)) or startIndex < expectedPostingsPerPage * (minPages-1)):
     while checkForMorePostings(len(postingsList), expectedPostingsPerPage, len(fullPostingsList.keys()), initialTotalNumberJobsFound, startIndex, maxPages, minPages):
         startIndex += expectedPostingsPerPage
@@ -558,14 +601,16 @@ def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, expectedPostingsPerPa
         else:
             urlArguments[jobSiteDetailsInfo['pageIndexKey']] = startIndex
         page = session.get(url, params=urlArguments, verify=False)
-        postingsList, numPostingsOnPage, totalNumberJobsFound = parseHtmlPage2(page.text, jobSiteDetailsInfo, list(fullPostingsList.keys()))
+        postingsList, numPostingsOnPage, totalNumberJobsFound = parseHtmlPage2(page.text, jobSiteDetailsInfo, searchTerm, knownPostIds)
         fullPostingsList.update(postingsList)
+        knownPostIds.extend(list(postingsList.keys()))
         print('Found {} new of {} postings of {} from url {}  Now {} postings found'.format(len(postingsList), numPostingsOnPage, totalNumberJobsFound, page.url, len(fullPostingsList)))
     return fullPostingsList
 
 def testKeywordSearches(args):
 
-    jobSiteDetailsInfo = jobSiteDetails['ca.indeed.com']
+    # jobSiteDetailsInfo = jobSiteDetails['ca.indeed.com']
+    jobSiteDetailsInfo = jobSiteDetails['www.simplyhired.ca']
 
     sysOutRedirect = SysOutRedirector.SysOutRedirector(path='/workspaces/reports/', filePrefix='ScrapeIndeed-KeywordTests-{}'.format(jobSiteDetailsInfo['netLoc']))
     print('\nTesting Keyword Searchs for the {} website job posting searches.\n'.format(jobSiteDetailsInfo['netLoc']))
@@ -575,9 +620,10 @@ def testKeywordSearches(args):
     urlSchemas = ['http']
     # fullPostingsList = {}
     fullPostingsList = {}
+    knownPostIds = []
     for urlSchema in urlSchemas:
         jobSiteDetailsInfo['urlSchema'] = urlSchema
-        fullPostingsList[urlSchema] = getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo, searchTermsList)
+        fullPostingsList[urlSchema] = getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo, searchTermsList, knownPostIds)
 
     print('\n\nResults found:\n')
 
@@ -611,7 +657,6 @@ def testKeywordSearches(args):
             diffSchemasSames[searchTerm] = len(keysInBoth)
 
     print('\n\nHere is a listing of the number of same entries in each list:\n')
-
     print('Schema  Search Terms            Postings', end='')
     for searchTerm in searchTermsList:
         print('  {0:^24}'.format(searchTerm), end='')
@@ -630,6 +675,53 @@ def testKeywordSearches(args):
             print('{0:^24}  {1:^8}  {2:^24}'.format(searchTerm, len(fullPostingsList[urlSchema][searchTerm]), diffSchemasSames[searchTerm]))
 
     print('\n\n')
+
+def main(args):
+    dbName = 'c:\workspaces\jobPosting\jobPosting.db'
+    searchTermsList = ['java', 'devops', 'python', ]
+    reportPath = '/workspaces/reports/'
+
+    parser = argparse.ArgumentParser(description='Searches a job posting website for jobs with the desired search term(s), saves them to a db and creates an html file with links to each new posting.')
+    parser.add_argument('--allSites', '-a', help='Search all known job post websites. Known websites are: {}. This overrides the "website" argument. This is the default option.'.format(', '.join(jobSiteDetails.keys())), action='store_const', const=True, default=True)
+    parser.add_argument('--getAllPostings', '-g', help='Get all of the job postings found for the specified search term(s). The default is to only get job postings that have not already been scraped and stored in the database.', action='store_const', const=True, default=None)
+    parser.add_argument('--website', '-w', help='Only search one website. Must be one of {}.'.format(', '.join(jobSiteDetails.keys())), choices=jobSiteDetails.keys(), default=None)
+    parser.add_argument('--search', '-s', help='The search term(s) to search for. Can be a list of terms separated by one or more spaces. Default is to search for each of these terms: "{}"'.format('", "'.join(searchTermsList)), nargs='*', default=searchTermsList)
+    parser.add_argument('--databaseName', '-d', help='The name and path of the database to save the job postings into. Defaults to "{}".'.format(dbName), default=dbName)
+    parser.add_argument('--reportPath', '-r', help='The path for where the resulting report files will be placed. Defaults to "{}".'.format(reportPath), default=reportPath)
+    args = parser.parse_args()
+
+    reportPath = args.reportPath
+    dbName = args.databaseName
+    searchTermsList = args.search
+    if args.website:
+        siteList = {args.website:jobSiteDetails[args.website]}
+    else:
+        siteList = jobSiteDetails
+
+    sysOutRedirect = SysOutRedirector.SysOutRedirector(path=reportPath, filePrefix='JobsSiteScrape-{}'.format('_'.join(siteList.keys())))
+
+    # pp = pprint.PrettyPrinter()
+
+    fullPostingsList = {}
+    knownPostIds = []
+    if not args.getAllPostings:
+        alreadyStoredPostingsRows = getResultDictForSQL('select distinct Id from JobPostings', None, dbName)
+        knownPostIds = [it['Id'] for it in alreadyStoredPostingsRows]
+        print('\nGot list of {} ids already in the database.\n'.format(len(knownPostIds)))
+
+    if not os.path.isfile(dbName):
+        ensureDatabaseTablesAlreadyCreated(dbName)
+
+    for jobSiteDetailsInfo in siteList.values():
+        fullPostingsList.update(getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo, searchTermsList, knownPostIds))
+
+    if len(fullPostingsList.keys()) > 0:
+        displayListings(fullPostingsList.values())
+        savePostingsToDB(fullPostingsList.values(), dbName)
+        generateHtmlPage(sysOutRedirect.getReportDirectory(), '_'.join(siteList.keys()), searchTermsList, fullPostingsList.values())
+
+    print('\nScraped {} postings.\n'.format(len(fullPostingsList)))
+    sysOutRedirect.close()
 
 def login(args):
     loginUrl = 'http://ca.indeed.com/account/login'
@@ -660,7 +752,7 @@ def login(args):
         generateHtmlPage('/workspaces/reports/', jobSiteDetailsInfo['netLoc'], [searchTerm], postingsList.values())
 
 ## ------------------------------------------------------------------------------------------------------
-def main(args):
+def oldmain(args):
     searchTermsList = ['java', 'devops', 'python']
     netLoc = 'ca.indeed.com'
     location = 'Canada'
@@ -668,7 +760,6 @@ def main(args):
     parser = argparse.ArgumentParser(description='Searches a job posting website for jobs with the desired search term(s), saves them to a db and creates an html file with links to each new posting.')
     parser.add_argument('--website', '-w', help='The website to search for job postings. Should be one of "*.indeed.com", "www.simplyhired.c*". Default is "{}"'.format(netLoc), default=netLoc)
     parser.add_argument('--path', '-p', help='The website path for searching for job postings. Default is "{}", which is for the "{}" website.'.format(urlPath, netLoc), default=urlPath)
-
     parser.add_argument('--search', '-s', help='The search term(s) to search for. Can be a list of terms separated by one or more spaces. Default is to search for each of these terms: "{}"'.format('", "'.join(searchTermsList)), nargs='*', default=searchTermsList)
     parser.add_argument('--location', '-l', help='The location or region to search for. Default is "{}"'.format(location), default=location)
 
@@ -681,7 +772,7 @@ def main(args):
     dbName = 'c:\workspaces\jobPosting\jobPosting.db'
     sysOutRedirect = SysOutRedirector.SysOutRedirector(path='/workspaces/reports/', filePrefix='JobsSiteScrape-{}'.format(netLoc))
 
-    fullPostingsList = getJobPostingsFromSite(jobSiteDetailsInfo, searchTermsList, maxPages=100, minPages=2)
+    # fullPostingsList = getJobPostingsFromSite(jobSiteDetailsInfo, searchTermsList, maxPages=100, minPages=2)
 
     fullPostingsList = []
     urlSchema = 'http'
@@ -701,14 +792,14 @@ def main(args):
         alreadyStoredPostingsRows = getResultDictForSQL('select distinct Id from JobPostings', None, dbName)
         alreadyStoredPostings = [it['Id'] for it in alreadyStoredPostingsRows]
 
-        postingsList, numPostingsOnPage = parseHtmlPage(pageHtml, netLoc, alreadyStoredPostings)
+        postingsList, numPostingsOnPage = parseHtmlPage(pageHtml, netLoc, searchTerm, alreadyStoredPostings)
         print('Found {} new postings to save from url {}!'.format(len(postingsList), url))
         fullPostingsList.extend(postingsList.values())
         while numPostingsOnPage == 10 and ((len(postingsList) > 0 and startIndex < 1000) or startIndex < 40):
             startIndex += 10
             url = buildUrl(urlSchema, netLoc, urlPath, urlArguments, startIndex)
             pageHtml = getHtmlPage(url)
-            postingsList, numPostingsOnPage = parseHtmlPage(pageHtml, netLoc, alreadyStoredPostings)
+            postingsList, numPostingsOnPage = parseHtmlPage(pageHtml, netLoc, searchTerm, alreadyStoredPostings)
             print('Found {} new postings to save from url {}!'.format(len(postingsList), url))
             fullPostingsList.extend(postingsList.values())
 
