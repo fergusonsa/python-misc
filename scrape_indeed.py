@@ -255,7 +255,6 @@ def savePostingsToDB(fullPostingsList, dbName):
                 pp.pprint(posting)
                 break
             except sqlite.IntegrityError as e:
-                # print('Unable to insert posting id: "{}", url: "{}", title: "{}", company: "{}", locale: "{}" as the Id, URL, Title, Company, Locale values are not unique.'.format(posting['id'], posting['url'], posting['title'], posting['company'], posting['locale']))
                 alreadyThereCount += 1
                 fullPostingsList.remove(posting)
 
@@ -325,11 +324,11 @@ def generateHtmlPage(dirPath, netloc, searchTermsList, postingsList):
     # Sort the list of postings by the locale
     sortedPostings = sorted(postingsList, key=lambda k: k['locale'])
     with open(filenamePath, 'w', encoding='utf-8') as myFile:
-        myFile.write(('<html>\n<head>\n<script>.job-tools-description { '
-                      'padding: 5px; }\n.job-tools-apply { padding: 5px; }\n'
-                      '</script>\n</head>\n<body>\n<p><h2>Search Site:</h2> '
-                      '{}</p>\n<p><h2>Search Terms:</h2>\n<hr/><ul>\n')
-                     .format(netloc))
+        myFile.write('<html>\n<head>\n<script>.job-tools-description { ')
+        myFile.write('padding: 5px; }\n.job-tools-apply { ')
+        myFile.write('padding: 5px; }\n</script>\n</head>\n<body>\n<p><h2>')
+        myFile.write('Search Site:</h2> {}</p>\n'.format(netloc))
+        myFile.write('<p><h2>Search Terms:</h2>\n<hr/><ul>\n')
         for st in searchTermsList:
             myFile.write('<li>{}</li>\n'.format(st))
         myFile.write('</ul></p>\n\n<hr/>\n\n')
@@ -380,14 +379,6 @@ def convertAgoToDate(agoStr):
     else:
         dt = 'unknown'
     return dt
-
-
-# def getHtmlPage(url):
-#     # print('getting URL "{}"'.format(url))
-#     pageFile = urlopen(url)
-#     pageHtml = pageFile.read()
-#     pageFile.close()
-#     return pageHtml
 
 
 def parseHtmlPage2(pageHtml, jobsiteDetails, searchTerms='',
@@ -489,133 +480,8 @@ def parseHtmlPage2(pageHtml, jobsiteDetails, searchTerms='',
     return postingsList, len(items), totalNumberJobsFound
 
 
-# def parseHtmlPage(pageHtml, urlBase='', searchTerms='', knownPostIds=[]):
-#     '''
-#     For ca.indeed.com website pages, the criteria for each item is as follows:
-#         parent div:     'div', {'class':'row', 'itemtype':'http://schema.org/JobPosting'}
-#         title:          'a', {'itemprop':'title'} 'title' property
-#         url:            'a', {'itemprop':'title'} 'href' property
-#         company:        'span', {'itemprop':'hiringOrganization'}, 'span', {'itemprop':'name'}, string value
-#         locale:         'span', {'itemprop':'jobLocation'}, 'span', {'itemprop':'address'}, 'span', {'itemprop':'addressLocality'}, string value
-#         id:             'a', {'itemprop':'title'} part 2 of 'href' property when split('=')
-#
-#     For www.simplyhired.ca website pages, the criteria for each item is as follows:
-#         parent element: 'li', {'class':'result'op'}, 'p', {'class':'serp-title', 'itemprop':'title'}, 'span', {'class':'serp-title-text'} string valu
-#         company:        'h4', {'class':'company', 'itemprop':'name'}, string value
-#         locale:         'span', {'itemprop':'jobLocation'}, 'span', {'itemprop':'address'}, string value
-#         id:             parent li id property
-#
-#     '''
-#
-#     soup = BeautifulSoup(pageHtml)
-#     items = []
-#     if urlBase == 'ca.indeed.com' or urlBase == '':
-#         # items = soup.findAll('div', {'class':'row', 'itemtype':'http://schema.org/JobPosting'})
-#         items = soup.findAll('div', {'itemtype': 'http://schema.org/JobPosting'})
-#     elif urlBase == 'www.simplyhired.ca':
-#         items = soup.findAll('li', {'class': 'result'})
-#
-#     postingsList = {}
-#     for it in items:
-#
-#         id = None
-#         title = None
-#         url = None
-#         company = None
-#         locale = None
-#
-#         if urlBase == 'ca.indeed.com' or urlBase == '':
-#             titleEl = it.find('a', {'itemprop': 'title'})
-#             if titleEl:
-#                 title = titleEl['title']
-#                 if urlBase:
-#                     url = 'http://{}{}'.format(urlBase, titleEl['href'])
-#                 else:
-#                     url = titleEl['href']
-#                 id = titleEl['href'].split('=')[1]
-#                 if id in knownPostingIdsList:
-#                     continue
-#             else:
-#                 print('Unable to get title for this item: {}'.format(str(it)))
-#                 title = 'Uknown title!'
-#                 url = 'unknown'
-#
-#             try:
-#                 el = it.find('span', {'itemprop': 'hiringOrganization'})
-#                 if el:
-#                     el1 = el.find('span', {'itemprop': 'name'})
-#                     if el1:
-#                         if el1.string:
-#                             company = el1.string.strip()
-#                         else:
-#                             company = el1.text.strip()
-#                     else:
-#                         company = 'unknown - cannot find name'
-#                 else:
-#                     company = 'unknown - cannot find hiringOrg'
-#             except:
-#                 typ, val, tb = sys.exc_info()
-#                 print('Unable to get company for item: Error type: {}, val: {}'.format(type, val))
-#                 company = 'unknown'
-#
-#             try:
-#                 el = it.find('span', {'itemprop': 'jobLocation'})
-#                 if el:
-#                     el1 = el.find('span', {'itemprop': 'address'})
-#                     if el1:
-#                         el2 = el1.find('span', {'itemprop': 'addressLocality'})
-#                         if el2:
-#                             locale = el2.string
-#                         else:
-#                             locale = 'unknown - cannot find locality'
-#                     else:
-#                         locale = 'unknown - cannot find address'
-#                 else:
-#                     locale = 'unknown - cannot find jobLocation'
-#
-#             except:
-#                 locale = 'unknown'
-#         elif urlBase == 'www.simplyhired.ca':
-#             id = it['id'][2:-2]
-#             titleEl = it.find('a', {'itemprop': 'title'})
-#             if titleEl:
-#                 title = titleEl.text
-#                 if urlBase:
-#                     url = 'http://{}{}'.format(urlBase, titleEl['href'])
-#                 else:
-#                     url = titleEl['href']
-#             companyEl = it.find('h4', {'class': 'company', 'itemprop': 'name'})
-#             if companyEl:
-#                 company = companyEl.text
-#             localeEl = it.find('span', {'itemprop': 'address'})
-#             locale = localeEl.text.replace('\n', '').strip()
-#
-#         if id:
-#             postingsList[id] = {'title': title, 'url': url, 'company': company,
-#                 'locale': locale, 'id': id, 'elem': it,
-#                 'searchTerms': searchTerms}
-#     return postingsList, len(items)
-
-
-# def buildUrl(urlSchema, netLoc,  urlPath, urlArguments, startIndex):
-#     urlArguments['start'] = startIndex
-#     queryString = urllib.parse.urlencode(urlArguments)
-#
-#     url = urllib.parse.urlunparse((urlSchema, netLoc, urlPath,
-#                                    '', queryString, ''))
-#     return url
-
-
 def sort_by_subdict(dictionary, subdict_key):
     return sorted(dictionary.items(), key=lambda k_v: k_v[1][subdict_key])
-
-
-def isSmallListInBigList(bigList, smallList):
-
-    for item in smallList:
-        if item not in bigList:
-            return False
-    return True
 
 
 def loginToWebSite(session, jobSiteDetailInfo):
@@ -657,7 +523,8 @@ def checkForMorePostings(numPostingsOnPage, expectedPostingsPerPage,
     '''
     if startIndex + expectedPostingsPerPage <= numPostingsSiteFound:
         if numPostingsOnPage == expectedPostingsPerPage:
-            if numAllUniquePostingsFoundOnPage > 0 and startIndex < expectedPostingsPerPage * (maxPages-1):
+            if (numAllUniquePostingsFoundOnPage > 0 and
+                    startIndex < expectedPostingsPerPage * (maxPages-1)):
                 return True
             elif startIndex < expectedPostingsPerPage * (minPages-1):
                 return True
@@ -807,13 +674,44 @@ def main(args):
     searchTermsList = ['java', 'devops', 'python', ]
     reportPath = '/workspaces/reports/'
 
-    parser = argparse.ArgumentParser(description='Searches a job posting website for jobs with the desired search term(s), saves them to a db and creates an html file with links to each new posting.')
-    parser.add_argument('--allSites', '-a', help='Search all known job post websites. Known websites are: {}. This overrides the "website" argument. This is the default option.'.format(', '.join(jobSiteDetails.keys())), action='store_const', const=True, default=True)
-    parser.add_argument('--getAllPostings', '-g', help='Get all of the job postings found for the specified search term(s). The default is to only get job postings that have not already been scraped and stored in the database.', action='store_const', const=True, default=None)
-    parser.add_argument('--website', '-w', help='Only search one website. Must be one of {}.'.format(', '.join(jobSiteDetails.keys())), choices=jobSiteDetails.keys(), default=None)
-    parser.add_argument('--search', '-s', help='The search term(s) to search for. Can be a list of terms separated by one or more spaces. Default is to search for each of these terms: "{}"'.format('", "'.join(searchTermsList)), nargs='*', default=searchTermsList)
-    parser.add_argument('--databaseName', '-d', help='The name and path of the database to save the job postings into. Defaults to "{}".'.format(dbName), default=dbName)
-    parser.add_argument('--reportPath', '-r', help='The path for where the resulting report files will be placed. Defaults to "{}".'.format(reportPath), default=reportPath)
+    parser = argparse.ArgumentParser(
+        description=('Searches a job posting website for jobs with the '
+                     'desired search term(s), saves them to a db and creates '
+                     'an html file with links to each new posting.'))
+    parser.add_argument('--allSites', '-a', action='store_const', const=True,
+                        default=True,
+                        help=('Search all known job post websites. Known '
+                              'websites are: {}. This overrides the "website"'
+                              ' argument. This is the default option.').format(
+                                ', '.join(jobSiteDetails.keys())))
+    parser.add_argument('--getAllPostings', '-g', action='store_const',
+                        const=True, default=None,
+                        help=('Get all of the job postings found for the '
+                              'specified search term(s). The default is to '
+                              'only get job postings that have not already '
+                              'been scraped and stored in the database.'))
+    parser.add_argument('--doNotSave', '-n', action='store_const',
+                        const=True, default=None,
+                        help=('Do not save any new postings to the database. '
+                              'This is used to help test. The default is to '
+                              'save all new postings to the database. '))
+    parser.add_argument('--website', '-w', choices=jobSiteDetails.keys(),
+                        default=None,
+                        help=('Only search one website. Must be one of {}.')
+                        .format(', '.join(jobSiteDetails.keys())))
+    parser.add_argument('--search', '-s', nargs='*', default=searchTermsList,
+                        help=('The search term(s) to search for. Can be a '
+                              'list of terms separated by one or more spaces.'
+                              ' Default is to search for each of these terms:'
+                              ' "{}"').format('", "'.join(searchTermsList)))
+    parser.add_argument('--databaseName', '-d', default=dbName,
+                        help=('The name and path of the database to save the '
+                              'job postings into. Defaults to "{}".').format(
+                                    dbName))
+    parser.add_argument('--reportPath', '-r', default=reportPath,
+                        help=('The path for where the resulting report files '
+                              'will be placed. Defaults to "{}".').format(
+                                    reportPath))
     args = parser.parse_args()
 
     reportPath = args.reportPath
@@ -827,8 +725,6 @@ def main(args):
     sysOutRedirect = SysOutRedirector.SysOutRedirector(
             path=reportPath,
             filePrefix='JobsSiteScrape-{}'.format('_'.join(siteList.keys())))
-
-    # pp = pprint.PrettyPrinter()
 
     fullPostingsList = {}
     knownPostIds = []
@@ -850,7 +746,8 @@ def main(args):
 
     if len(fullPostingsList.keys()) > 0:
         displayListings(fullPostingsList.values())
-        savePostingsToDB(fullPostingsList.values(), dbName)
+        if not args.doNotSave:
+            savePostingsToDB(fullPostingsList.values(), dbName)
         generateHtmlPage(sysOutRedirect.getReportDirectory(),
                          '_'.join(siteList.keys()),
                          searchTermsList, fullPostingsList.values())
@@ -890,77 +787,6 @@ def login(args):
         pp.pprint(newlist)
         generateHtmlPage('/workspaces/reports/', jobSiteDetailsInfo['netLoc'],
                          [searchTerm], postingsList.values())
-
-
-# def oldmain(args):
-#     searchTermsList = ['java', 'devops', 'python']
-#     netLoc = 'ca.indeed.com'
-#     location = 'Canada'
-#     urlPath = 'jobs'
-#     parser = argparse.ArgumentParser(description='Searches a job posting website for jobs with the desired search term(s), saves them to a db and creates an html file with links to each new posting.')
-#     parser.add_argument('--website', '-w', help='The website to search for job postings. Should be one of "*.indeed.com", "www.simplyhired.c*". Default is "{}"'.format(netLoc), default=netLoc)
-#     parser.add_argument('--path', '-p', help='The website path for searching for job postings. Default is "{}", which is for the "{}" website.'.format(urlPath, netLoc), default=urlPath)
-#     parser.add_argument('--search', '-s', help='The search term(s) to search for. Can be a list of terms separated by one or more spaces. Default is to search for each of these terms: "{}"'.format('", "'.join(searchTermsList)), nargs='*', default=searchTermsList)
-#     parser.add_argument('--location', '-l', help='The location or region to search for. Default is "{}"'.format(location), default=location)
-#
-#     args = parser.parse_args()
-#     netLoc = args.website
-#     location = args.location
-#     searchTermsList = args.search
-#     urlPath = args.path
-#
-#     dbName = 'c:\workspaces\jobPosting\jobPosting.db'
-#     sysOutRedirect = SysOutRedirector.SysOutRedirector(
-#             path='/workspaces/reports/',
-#             filePrefix='JobsSiteScrape-{}'.format(netLoc))
-#
-#     fullPostingsList = []
-#     urlSchema = 'http'
-#     for searchTerm in searchTermsList:
-#         startIndex = 0
-#         urlArguments = {'q': searchTerm,
-#                         'l': location,
-#                         'jt': 'contract',
-#                         'sort': 'date',
-#                         'start': startIndex}
-#         url = buildUrl(urlSchema, netLoc, urlPath, urlArguments, startIndex)
-#         print('\nHere is the initial URL to be "scraped": {}\n\n'.format(url))
-#         pageHtml = getHtmlPage(url)
-#         if not os.path.isfile(dbName):
-#             ensureDatabaseTablesAlreadyCreated(dbName)
-#
-#         alreadyStoredPostingsRows = getResultDictForSQL(
-#                 'select distinct Id from JobPostings', None, dbName)
-#         alreadyStoredPostings = [it['Id'] for it in alreadyStoredPostingsRows]
-#
-#         postingsList, numPostingsOnPage = parseHtmlPage(pageHtml, netLoc,
-#                                                         searchTerm,
-#                                                         alreadyStoredPostings)
-#         print('Found {} new postings to save from url {}!'.format(
-#                 len(postingsList), url))
-#         fullPostingsList.extend(postingsList.values())
-#         while numPostingsOnPage == 10 and ((len(postingsList) > 0 and
-#                                             startIndex < 1000) or
-#                                            startIndex < 40):
-#             startIndex += 10
-#             url = buildUrl(urlSchema, netLoc, urlPath, urlArguments,
-#                            startIndex)
-#             pageHtml = getHtmlPage(url)
-#             postingsList, numPostingsOnPage = parseHtmlPage(
-#                     pageHtml, netLoc, searchTerm, alreadyStoredPostings)
-#             print('Found {} new postings to save from url {}!'.format(
-#                     len(postingsList), url))
-#             fullPostingsList.extend(postingsList.values())
-#
-#     if len(fullPostingsList) > 0:
-#         displayListings(fullPostingsList)
-#         savePostingsToDB(fullPostingsList, dbName)
-#         generateHtmlPage(sysOutRedirect.getReportDirectory(), netLoc,
-#                          searchTermsList, fullPostingsList)
-#
-#     print('\nScraped {} postings from {} with the location {}.\n'.format(
-#             len(fullPostingsList), netLoc, location))
-#     sysOutRedirect.close()
 
 
 if __name__ == "__main__":
