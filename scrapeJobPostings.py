@@ -52,8 +52,8 @@ jobSiteDetails = {
                     'criteria': {'itemprop': 'addressLocality'},
                 },
                 'company': {
-                    'element': '',
-                    'criteria': {},
+                    'element': 'span',
+                    'criteria': {'itemprop': 'hiringOrganization'},
                 },
                 'url': {
                     'element': 'a',
@@ -278,6 +278,23 @@ def savePostingsToDB(fullPostingsList, dbName):
                           "group by Company order by Company"), dbName)
 
 
+def getRecentPostings(dbName):
+    pastDate = (datetime.datetime.now() - datetime.timedelta(
+                    days=4)).strftime('%Y-%m-%d')
+    res = getResultDictForSQL(("select Id as id, URL as url, Title, Company "
+                               "as company, Locale as locale, SearchTerms as"
+                               " searchTerms, ElementHtml as elem, postedDate"
+                               ", insertedDate from JobPostings where "
+                               "postedDate > '{0}' and insertedDate > '{0}'"
+                               ).format(pastDate), databaseName=dbName)
+    print('Numbr of res returned: {}'.format(len(res)))
+    # print(res[0])
+    for item in res:
+        item['elem'] = BeautifulSoup(item['elem'])
+    postings = {item['id']: item for item in res}
+    print('Numbr of postings returned: {}'.format(len(postings)))
+    return postings
+
 def getMaxLengthOfDictValuesForKeys(thisDict, keys):
     lengths = [len(thisDict.get(key)) if thisDict.get(key) else 0
                for key in keys]
@@ -324,9 +341,12 @@ def generateHtmlPage(dirPath, netloc, searchTermsList, postingsList):
     # Sort the list of postings by the locale
     sortedPostings = sorted(postingsList, key=lambda k: k['locale'])
     with open(filenamePath, 'w', encoding='utf-8') as myFile:
-        myFile.write('<html>\n<head>\n<script>.job-tools-description { ')
+        myFile.write('<html>\n<head>\n<style>.job-tools-description { ')
         myFile.write('padding: 5px; }\n.job-tools-apply { ')
-        myFile.write('padding: 5px; }\n</script>\n</head>\n<body>\n<p><h2>')
+        myFile.write('padding: 5px; }\n.recent-date { font-weight: bold;')
+        myFile.write('\ncolor: green; }\n.desired-location { ')
+        myFile.write('font-weight: bold;\ncolor: green; }\n</style>\n')
+        myFile.write('</head>\n<body>\n<p><h2>')
         myFile.write('Search Site:</h2> {}</p>\n'.format(netloc))
         myFile.write('<p><h2>Search Terms:</h2>\n<hr/><ul>\n')
         for st in searchTermsList:
@@ -335,18 +355,22 @@ def generateHtmlPage(dirPath, netloc, searchTermsList, postingsList):
 
         for posting in sortedPostings:
             try:
-                for anch in psoting['elem'].findAll('a'):
+                for anch in posting['elem'].findAll('a'):
                     del(anch['onclick'])
                     del(anch['onmousedown'])
-                myFile.write(('<ul><li>ID: {}</li><li>Title: {}</li><li>URL: '
-                              '<a href="{}"/></li><li>Company: {}</li><li>'
-                              'Location: {}</li><li>Posted Date: {}</li></ul>'
-                              '\n').format(posting.get('id'),
-                                           posting.get('title'),
-                                           posting.get('url'),
-                                           posting.get('company'),
-                                           posting.get('locale'),
-                                           posting.get('postedDate'),))
+                myFile.write(('<ul><li>ID: {0}</li><li>Title: {1}</li><li>URL'
+                              ': <a href="{2}">{2}</a></li><li>Company: {3}'
+                              '</li><li>Location: <span class={6}>{4}</span>'
+                              '</li><li>Posted Date: <span class={7}>{5}'
+                              '</span></li></ul>\n').format(
+                                    posting.get('id'),
+                                    posting.get('title'),
+                                    posting.get('url'),
+                                    posting.get('company'),
+                                    posting.get('locale'),
+                                    posting.get('postedDate'),
+                                    'desired-location' if False else '',
+                                    'recent-date' if False else '',))
                 myFile.write(str(posting['elem']))
             except:
                 typ2, val2, tb2 = sys.exc_info()
@@ -500,7 +524,7 @@ def getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo,
                                                  searchTermsList,
                                                  knownPostIds=[],
                                                  expectedPostingsPerPage=10,
-                                                 maxPages=100, minPages=10):
+                                                 maxPages=100, minPages=4):
     fullPostingsList = {}
     session = requests.Session()
     if jobSiteDetailsInfo['urlSchema'] == 'https':
@@ -520,6 +544,15 @@ def checkForMorePostings(numPostingsOnPage, expectedPostingsPerPage,
                          startIndex, maxPages, minPages):
     '''
     Checks criteria for whether to check for more postings on the next page.
+
+    Args:
+        numPostingsOnPage (int): the total number of postings found on the page
+        expectedPostingsPerPage (int): the number of postings expected to be on the page
+        numAllUniquePostingsFoundOnPage (int): the number of new/unique postings found on the page
+        numPostingsSiteFound (int): the total number of postings found on the site
+        startIndex (int): the starting index for the page, should be a multiple of expectedPostingsPerPage
+        maxPages (int): the maximum number of pages to scrape
+        minPages (int): the minimum number of pages to scrape
     '''
     if startIndex + expectedPostingsPerPage <= numPostingsSiteFound:
         if numPostingsOnPage == expectedPostingsPerPage:
@@ -528,8 +561,10 @@ def checkForMorePostings(numPostingsOnPage, expectedPostingsPerPage,
                 return True
             elif startIndex < expectedPostingsPerPage * (minPages-1):
                 return True
+        print('numPostingsOnPage ({0}) != expectedPostingsPerPage ({1}) OR numAllUniquePostingsFoundOnPage ({2}) == 0 OR startIndex ({3}) < expectedPostingsPerPage ({4}) * (maxPages ({5}) -1) OR startIndex ({3}) < expectedPostingsPerPage ({4}) * (minPages ({6}) -1) '.format(numPostingsOnPage, expectedPostingsPerPage, numAllUniquePostingsFoundOnPage, startIndex, expectedPostingsPerPage, maxPages, minPages))
         return False
     else:
+        print('startIndex ({}) + expectedPostingsPerPage ({}) <= numPostingsSiteFound ({}) is False'.format(startIndex, expectedPostingsPerPage, numPostingsSiteFound))
         return False
 
 
@@ -555,7 +590,9 @@ def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, knownPostIds=[],
                               jobSiteDetailsInfo['netLoc'],
                               jobSiteDetailsInfo['urlPath'])
     page = session.get(url, params=urlArguments, verify=False)
-    print('\n\nHere is the initial URL to be "scraped": {}\n'.format(page.url))
+    # print('\n\npage header content-type info: {}\n'.format(
+    #     page.headers['content-type']))
+    print('\n\nHere is initial URL to be "scraped": {}\n'.format(page.url))
 
     postingsList, numPostingsOnPage, initTotalNumPostings = parseHtmlPage2(
             page.text, jobSiteDetailsInfo, searchTerm, knownPostIds)
@@ -564,9 +601,8 @@ def getJobPostingsFromSite(jobSiteDetailsInfo, searchTerm, knownPostIds=[],
             initTotalNumPostings, page.url))
     fullPostingsList.update(postingsList)
     knownPostIds.extend(list(postingsList.keys()))
-    while checkForMorePostings(len(postingsList), expectedPostingsPerPage,
-                               len(fullPostingsList.keys()),
-                               initTotalNumPostings,
+    while checkForMorePostings(numPostingsOnPage, expectedPostingsPerPage,
+                               len(postingsList), initTotalNumPostings,
                                startIndex, maxPages, minPages):
         startIndex += expectedPostingsPerPage
         if jobSiteDetailsInfo['pageIndexType'] == 'pageCount':
@@ -712,6 +748,12 @@ def main(args):
                         help=('The path for where the resulting report files '
                               'will be placed. Defaults to "{}".').format(
                                     reportPath))
+    parser.add_argument('--generateReport', '-gr', action='store_const',
+                        const=True, default=None,
+                        help=('Generate the HTML report containing the '
+                              'postings already scraped that were posted in '
+                              'the past 4 days. Do not check websites for '
+                              'new posts.'))
     args = parser.parse_args()
 
     reportPath = args.reportPath
@@ -727,32 +769,37 @@ def main(args):
             filePrefix='JobsSiteScrape-{}'.format('_'.join(siteList.keys())))
 
     fullPostingsList = {}
-    knownPostIds = []
-    if not args.getAllPostings:
-        alreadyStoredPostingsRows = getResultDictForSQL(
-                'select distinct Id from JobPostings', None, dbName)
-        knownPostIds = [it['Id'] for it in alreadyStoredPostingsRows]
-        print('\nGot list of {} ids already in the database.\n'.format(
-            len(knownPostIds)))
+    if args.generateReport:
+        fullPostingsList = getRecentPostings(dbName)
+    else:
+        knownPostIds = []
+        if not args.getAllPostings:
+            alreadyStoredPostingsRows = getResultDictForSQL(
+                    'select distinct Id from JobPostings', None, dbName)
+            knownPostIds = [it['Id'] for it in alreadyStoredPostingsRows]
+            print('\nGot list of {} ids already in the database.\n'.format(
+                len(knownPostIds)))
 
-    if not os.path.isfile(dbName):
-        ensureDatabaseTablesAlreadyCreated(dbName)
+        if not os.path.isfile(dbName):
+            ensureDatabaseTablesAlreadyCreated(dbName)
 
-    for jobSiteDetailsInfo in siteList.values():
-        fullPostingsList.update(
-            getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo,
-                                                         searchTermsList,
-                                                         knownPostIds))
+        for jobSiteDetailsInfo in siteList.values():
+            fullPostingsList.update(
+                getJobPostingsFromSiteForMultipleSearchTerms(jobSiteDetailsInfo,
+                                                             searchTermsList,
+                                                             knownPostIds))
+
+        if len(fullPostingsList.keys()) > 0:
+            displayListings(fullPostingsList.values())
+            if not args.doNotSave:
+                savePostingsToDB(fullPostingsList.values(), dbName)
+        print('\nScraped {} postings.\n'.format(len(fullPostingsList)))
 
     if len(fullPostingsList.keys()) > 0:
-        displayListings(fullPostingsList.values())
-        if not args.doNotSave:
-            savePostingsToDB(fullPostingsList.values(), dbName)
         generateHtmlPage(sysOutRedirect.getReportDirectory(),
                          '_'.join(siteList.keys()),
                          searchTermsList, fullPostingsList.values())
 
-    print('\nScraped {} postings.\n'.format(len(fullPostingsList)))
     sysOutRedirect.close()
 
 
